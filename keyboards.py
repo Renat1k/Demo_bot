@@ -1,6 +1,6 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-from config import SERVICES
+from config import SERVICES, WEBAPP_URL
 import texts
 
 CB_MAIN = "nav:main"
@@ -52,6 +52,15 @@ def main_menu_keyboard(admin: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(texts.BTN_RECORDS, callback_data=CB_RECORDS)],
         [InlineKeyboardButton(texts.BTN_CONTACTS, callback_data=CB_CONTACTS)],
     ]
+    if WEBAPP_URL.startswith("https://"):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    texts.BTN_WEBAPP,
+                    web_app=WebAppInfo(url=WEBAPP_URL),
+                )
+            ]
+        )
     if admin:
         rows.append([InlineKeyboardButton(texts.BTN_ADMIN, callback_data=CB_ADMIN)])
     return InlineKeyboardMarkup(rows)

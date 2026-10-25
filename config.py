@@ -27,21 +27,32 @@ def _read_port() -> int:
     return 10000
 
 
+def _read_webapp_url() -> str:
+    raw = os.environ.get("WEBAPP_URL", "").strip().rstrip("/")
+    if raw:
+        return raw
+    host = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
+    if host:
+        return f"https://{host}/app"
+    return ""
+
+
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = _read_admin_chat_id()
 PORT = _read_port()
+WEBAPP_URL = _read_webapp_url()
 DB_PATH = os.environ.get("DB_PATH", "bot.db").strip() or "bot.db"
 HOLD_TTL_SECONDS = 300
 TIMEZONE = "Europe/Kyiv"
 BOOKING_FLOW_KEY = "booking_flow"
 
-SALON_NAME = "Найкраща"
+SALON_NAME = "DEMO"
 CITY = "Київ"
 CITY_LOCATIVE = "Києві"
 ADDRESS = "Київ, вул. Прикладна, 1 (демо)"
 PHONE = "+380 (67) 000-00-00"
 PHONE_URI = "tel:+380670000000"
-INSTAGRAM_URL = "https://instagram.com/naikrashcha_demo"
+INSTAGRAM_URL = "https://instagram.com/demo_salon"
 WORKING_HOURS = "Пн–Сб: 09:00–20:00\nНд: 10:00–18:00\nОбід: 13:00–14:00"
 
 SERVICES = (

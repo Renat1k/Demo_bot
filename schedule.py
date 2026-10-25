@@ -116,6 +116,40 @@ def _date_now() -> datetime:
     return datetime.now(_zone())
 
 
+def current_time() -> datetime:
+    return _date_now()
+
+
+def slot_grid(date_id: str) -> list[tuple[str, int]]:
+    window = _window(date_id)
+    if window is None:
+        return []
+    opening, closing = window
+    slots: list[tuple[str, int]] = []
+    start = opening
+    while start < closing:
+        slots.append((format_clock(start), start))
+        start += SLOT_STEP_MINUTES
+    return slots
+
+
+def can_fit(date_id: str, service: dict, start_minutes: int) -> bool:
+    window = _window(date_id)
+    if window is None:
+        return False
+    duration = int(service.get("duration_minutes", 60))
+    if duration <= 0:
+        return False
+    opening, closing = window
+    end = start_minutes + duration
+    if start_minutes < opening or end > closing:
+        return False
+    return not any(
+        overlaps(start_minutes, end, break_start, break_end)
+        for break_start, break_end in BREAKS
+    )
+
+
 def available_slots(
     date_id: str,
     service: dict,
@@ -128,7 +162,6 @@ def available_slots(
     duration = int(service.get("duration_minutes", 60))
     if duration <= 0:
         return []
-    opening, closing = window
     current = now or _date_now()
     try:
         day = date.fromisoformat(date_id)
@@ -136,18 +169,23 @@ def available_slots(
         return []
 
     slots: list[tuple[str, str]] = []
-    start = opening
-    while start + duration <= closing:
+    for label, start in slot_grid(date_id):
+        if not can_fit(date_id, service, start):
+            continue
         end = start + duration
-        if not any(overlaps(start, end, break_start, break_end) for break_start, break_end in BREAKS):
-            start_at = datetime.combine(day, time(hour=start // 60, minute=start % 60), tzinfo=_zone())
-            if start_at > current and not any(
-                overlaps(start, end, occupied_start, occupied_end)
-                for occupied_start, occupied_end in (occupied or [])
-            ):
-                label = format_clock(start)
-                slots.append((label, label))
-        start += SLOT_STEP_MINUTES
+        start_at = datetime.combine(
+            day,
+            time(hour=start // 60, minute=start % 60),
+            tzinfo=_zone(),
+        )
+        if start_at <= current:
+            continue
+        if any(
+            overlaps(start, end, occupied_start, occupied_end)
+            for occupied_start, occupied_end in (occupied or [])
+        ):
+            continue
+        slots.append((label, label))
     return slots
 
 

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: naikrashcha-bot
+    name: demo-salon-bot
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -14,4 +14,6 @@ services:
       - key: BOT_TOKEN
         sync: false
       - key: ADMIN_CHAT_ID
+        sync: false
+      - key: WEBAPP_URL
         sync: false

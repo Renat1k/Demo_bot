@@ -61,6 +61,7 @@ def init_db() -> None:
                 status TEXT NOT NULL DEFAULT 'held'
                     CHECK (status IN ('held', 'pending', 'confirmed', 'rejected', 'cancelled', 'expired')),
                 expires_at TEXT,
+                client_token TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -68,12 +69,16 @@ def init_db() -> None:
         )
         _ensure_column(connection, "price_label", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(connection, "duration_minutes", "INTEGER NOT NULL DEFAULT 60")
+        _ensure_column(connection, "client_token", "TEXT NOT NULL DEFAULT ''")
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_active_slot
             ON bookings (date_id, time_id)
             WHERE status IN ('held', 'pending', 'confirmed')
             """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bookings_client_token ON bookings (client_token)"
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_bookings_user_id ON bookings (user_id)"
@@ -120,8 +125,10 @@ def create_hold(
     slot_date: dict,
     slot_time: dict,
     ttl_seconds: int | None = None,
+    client_token: str = "",
 ) -> dict | None:
     ttl = ttl_seconds if ttl_seconds is not None else HOLD_TTL_SECONDS
+    token = (client_token or "").strip()[:80]
 
     with closing(_connect()) as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -138,6 +145,21 @@ def create_hold(
                 connection.execute("ROLLBACK")
                 return None
             _expire_stale_holds(connection, now_text)
+
+            if token:
+                previous = connection.execute(
+                    """
+                    SELECT * FROM bookings
+                    WHERE client_token = ? AND user_id = ?
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (token, user_id),
+                ).fetchone()
+                if previous is not None:
+                    connection.execute("COMMIT")
+                    result = dict(previous)
+                    result["idempotent"] = True
+                    return result
 
             existing = connection.execute(
                 """
@@ -177,8 +199,8 @@ def create_hold(
                     (user_id, username, service_id, service_name,
                      price_label, duration_minutes,
                      date_id, date_label, time_id, time_label,
-                     status, expires_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     status, expires_at, client_token, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -193,6 +215,7 @@ def create_hold(
                     slot_time["label"],
                     STATUS_HELD,
                     expires_text,
+                    token,
                     now_text,
                     now_text,
                 ),
@@ -367,6 +390,27 @@ def count_bookings(status: str | None = None) -> int:
     with closing(_connect()) as connection:
         row = connection.execute(query, params).fetchone()
         return int(row["total"]) if row is not None else 0
+
+
+def get_bookings_for_date(
+    date_id: str,
+    statuses: tuple[str, ...] = ACTIVE_STATUSES,
+) -> list[dict]:
+    expire_stale_holds()
+    if not statuses:
+        return []
+    placeholders = ", ".join("?" for _ in statuses)
+    query = (
+        "SELECT * FROM bookings "
+        f"WHERE date_id = ? AND status IN ({placeholders}) "
+        "ORDER BY time_id, id"
+    )
+    with closing(_connect()) as connection:
+        rows = connection.execute(
+            query,
+            (date_id, *statuses),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def cancel_user_booking(booking_id: int, user_id: int) -> dict | None:

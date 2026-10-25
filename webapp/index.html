@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#f4f0ea">
+  <title>DEMO — салон краси</title>
+  <link rel="stylesheet" href="/app/styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">D</div>
+        <div>
+          <div class="brand-name" id="salon-name">DEMO</div>
+          <div class="brand-sub" id="salon-sub">салон краси · Київ</div>
+        </div>
+      </div>
+      <button class="icon-button" id="refresh-button" type="button" aria-label="Оновити" data-action="refresh">↻</button>
+    </header>
+
+    <main id="content" class="content" aria-live="polite">
+      <div class="loading-panel">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Завантажуємо салон…</p>
+      </div>
+    </main>
+
+    <nav id="bottom-nav" class="bottom-nav" aria-label="Навігація" hidden>
+      <button type="button" data-action="navigate" data-view="home" class="nav-item is-active">
+        <span class="nav-icon" aria-hidden="true">⌂</span><span>Головна</span>
+      </button>
+      <button type="button" data-action="navigate" data-view="services" class="nav-item">
+        <span class="nav-icon" aria-hidden="true">✂</span><span>Послуги</span>
+      </button>
+      <button type="button" data-action="navigate" data-view="booking" class="nav-item">
+        <span class="nav-icon" aria-hidden="true">＋</span><span>Запис</span>
+      </button>
+      <button type="button" data-action="navigate" data-view="records" class="nav-item">
+        <span class="nav-icon" aria-hidden="true">◷</span><span>Мої</span>
+      </button>
+      <button type="button" data-action="navigate" data-view="info" class="nav-item">
+        <span class="nav-icon" aria-hidden="true">ⓘ</span><span>Контакти</span>
+      </button>
+      <button type="button" data-action="navigate" data-view="admin" class="nav-item" id="admin-nav" hidden>
+        <span class="nav-icon" aria-hidden="true">⚙</span><span>Адмін</span>
+      </button>
+    </nav>
+
+    <div id="loading-overlay" class="loading-overlay" hidden aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </div>
+  <noscript>Для роботи застосунку потрібно увімкнути JavaScript.</noscript>
+  <script src="/app/app.js"></script>
+</body>
+</html>

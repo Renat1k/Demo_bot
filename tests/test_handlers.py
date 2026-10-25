@@ -12,11 +12,17 @@ class InlineKeyboardButton:
     def __init__(self, text, callback_data=None, **kwargs):
         self.text = text
         self.callback_data = callback_data
+        self.web_app = kwargs.get("web_app")
 
 
 class InlineKeyboardMarkup:
     def __init__(self, inline_keyboard, **kwargs):
         self.inline_keyboard = inline_keyboard
+
+
+class WebAppInfo:
+    def __init__(self, url):
+        self.url = url
 
 
 class CallbackQuery:
@@ -29,6 +35,7 @@ class Update:
 
 telegram.InlineKeyboardButton = InlineKeyboardButton
 telegram.InlineKeyboardMarkup = InlineKeyboardMarkup
+telegram.WebAppInfo = WebAppInfo
 telegram.CallbackQuery = CallbackQuery
 telegram.Update = Update
 sys.modules["telegram"] = telegram
@@ -443,6 +450,32 @@ class BookingHandlerTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertTrue(any("#1" in label for label in labels))
 
+    def test_webapp_button_requires_https_url(self) -> None:
+        old_url = keyboards.WEBAPP_URL
+        try:
+            keyboards.WEBAPP_URL = "https://example.test/app"
+            markup = keyboards.main_menu_keyboard()
+            web_buttons = [
+                button
+                for row in markup.inline_keyboard
+                for button in row
+                if button.web_app
+            ]
+            self.assertEqual(len(web_buttons), 1)
+            self.assertEqual(web_buttons[0].web_app.url, "https://example.test/app")
+
+            keyboards.WEBAPP_URL = "http://example.test/app"
+            markup = keyboards.main_menu_keyboard()
+            self.assertFalse(
+                any(
+                    button.web_app
+                    for row in markup.inline_keyboard
+                    for button in row
+                )
+            )
+        finally:
+            keyboards.WEBAPP_URL = old_url
+
     async def test_registration_covers_all_keyboard_callbacks(self) -> None:
         application = FakeApplication()
         register_handlers(application)
@@ -474,6 +507,7 @@ class BookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             for markup in keyboards_to_check
             for row in markup.inline_keyboard
             for button in row
+            if button.callback_data is not None
         }
         specific = [
             handler

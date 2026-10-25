@@ -145,6 +145,7 @@ class BookingDatabaseTests(unittest.TestCase):
             }
         self.assertIn("duration_minutes", columns)
         self.assertIn("price_label", columns)
+        self.assertIn("client_token", columns)
 
     def test_client_cancel_frees_slot_and_checks_owner(self) -> None:
         future_date = {"id": "2099-01-05", "label": "5 січня"}
@@ -197,6 +198,72 @@ class BookingDatabaseTests(unittest.TestCase):
         self.assertIsNotNone(database.submit_hold(hold["id"], 1))
         self.assertIsNone(database.cancel_user_booking(hold["id"], 1))
         self.assertEqual(database.get_booking(hold["id"])["status"], "pending")
+
+    def test_hold_idempotency_token_returns_same_row(self) -> None:
+        first = database.create_hold(
+            1,
+            "one",
+            SERVICE,
+            SLOT_DATE,
+            {"id": "10:00", "label": "10:00"},
+            client_token="mini-app-hold-1",
+        )
+        second = database.create_hold(
+            1,
+            "one",
+            SERVICE,
+            SLOT_DATE,
+            {"id": "10:00", "label": "10:00"},
+            client_token="mini-app-hold-1",
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(first["id"], second["id"])
+
+    def test_concurrent_same_idempotency_token_creates_one_hold(self) -> None:
+        def attempt(_index: int):
+            return database.create_hold(
+                1,
+                "one",
+                SERVICE,
+                SLOT_DATE,
+                {"id": "10:00", "label": "10:00"},
+                client_token="concurrent-token",
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(attempt, (1, 2)))
+
+        self.assertTrue(all(result is not None for result in results))
+        self.assertEqual(results[0]["id"], results[1]["id"])
+        with closing(sqlite3.connect(database.DB_PATH)) as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM bookings WHERE client_token = ?",
+                ("concurrent-token",),
+            ).fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_bookings_for_date_returns_active_only(self) -> None:
+        active = database.create_hold(
+            1,
+            "one",
+            SERVICE,
+            SLOT_DATE,
+            {"id": "10:00", "label": "10:00"},
+        )
+        rejected = database.create_hold(
+            2,
+            "two",
+            SERVICE,
+            SLOT_DATE,
+            {"id": "11:00", "label": "11:00"},
+        )
+        self.assertIsNotNone(active)
+        self.assertIsNotNone(rejected)
+        database.submit_hold(rejected["id"], 2)
+        database.reject_booking(rejected["id"])
+        rows = database.get_bookings_for_date("2026-10-27")
+        self.assertEqual([row["id"] for row in rows], [active["id"]])
 
     def test_two_clients_cannot_hold_same_slot(self) -> None:
         def attempt(user_id: int):

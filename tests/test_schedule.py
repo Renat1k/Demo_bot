@@ -99,6 +99,17 @@ class ScheduleTests(unittest.TestCase):
         self.assertFalse(schedule.is_within_booking_window("2027-01-01", now=now))
         self.assertFalse(schedule.is_within_booking_window("bad-date", now=now))
 
+    def test_slot_grid_and_fit(self) -> None:
+        labels = {label for label, _start in schedule.slot_grid("2026-10-27")}
+        self.assertIn("09:00", labels)
+        self.assertIn("13:00", labels)
+        self.assertIn("19:30", labels)
+        self.assertTrue(schedule.can_fit("2026-10-27", SERVICE_60, 9 * 60))
+        self.assertFalse(schedule.can_fit("2026-10-27", SERVICE_60, 12 * 60 + 30))
+        self.assertFalse(schedule.can_fit("2026-10-27", SERVICE_60, 19 * 60 + 30))
+        self.assertFalse(schedule.can_fit("2026-10-27", SERVICE_120, 11 * 60 + 30))
+        self.assertTrue(schedule.can_fit("2026-10-27", SERVICE_120, 11 * 60))
+
 
 if __name__ == "__main__":
     unittest.main()
