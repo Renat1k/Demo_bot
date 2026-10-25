@@ -1,8 +1,12 @@
+import logging
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 from config import DB_PATH, HOLD_TTL_SECONDS
+from schedule import can_cancel, overlaps, time_to_minutes
+
+logger = logging.getLogger(__name__)
 
 STATUS_HELD = "held"
 STATUS_PENDING = "pending"
@@ -30,6 +34,14 @@ def _connect() -> sqlite3.Connection:
     return connection
 
 
+def _ensure_column(connection: sqlite3.Connection, name: str, definition: str) -> None:
+    columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(bookings)").fetchall()
+    }
+    if name not in columns:
+        connection.execute(f"ALTER TABLE bookings ADD COLUMN {name} {definition}")
+
+
 def init_db() -> None:
     with closing(_connect()) as connection:
         connection.execute(
@@ -40,6 +52,8 @@ def init_db() -> None:
                 username TEXT NOT NULL DEFAULT '',
                 service_id TEXT NOT NULL,
                 service_name TEXT NOT NULL,
+                price_label TEXT NOT NULL DEFAULT '',
+                duration_minutes INTEGER NOT NULL DEFAULT 60,
                 date_id TEXT NOT NULL,
                 date_label TEXT NOT NULL,
                 time_id TEXT NOT NULL,
@@ -52,6 +66,8 @@ def init_db() -> None:
             )
             """
         )
+        _ensure_column(connection, "price_label", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(connection, "duration_minutes", "INTEGER NOT NULL DEFAULT 60")
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_active_slot
@@ -65,11 +81,14 @@ def init_db() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings (status)"
         )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bookings_date_status ON bookings (date_id, status)"
+        )
     expire_stale_holds()
 
 
-def _expire_stale_holds(connection: sqlite3.Connection, now_text: str) -> None:
-    connection.execute(
+def _expire_stale_holds(connection: sqlite3.Connection, now_text: str) -> int:
+    cursor = connection.execute(
         """
         UPDATE bookings
         SET status = ?, updated_at = ?
@@ -77,6 +96,7 @@ def _expire_stale_holds(connection: sqlite3.Connection, now_text: str) -> None:
         """,
         (STATUS_EXPIRED, now_text, STATUS_HELD, now_text),
     )
+    return cursor.rowcount
 
 
 def expire_stale_holds() -> None:
@@ -84,8 +104,10 @@ def expire_stale_holds() -> None:
         connection.execute("BEGIN IMMEDIATE")
         try:
             now_text = _format_utc(_now_utc())
-            _expire_stale_holds(connection, now_text)
+            expired = _expire_stale_holds(connection, now_text)
             connection.execute("COMMIT")
+            if expired:
+                logger.info("expired_holds count=%s", expired)
         except Exception:
             connection.execute("ROLLBACK")
             raise
@@ -107,7 +129,40 @@ def create_hold(
             now = _now_utc()
             now_text = _format_utc(now)
             expires_text = _format_utc(now + timedelta(seconds=ttl))
+            duration = int(service.get("duration_minutes", 60))
+            if duration <= 0:
+                connection.execute("ROLLBACK")
+                return None
+            start_minutes = time_to_minutes(str(slot_time.get("id", "")))
+            if start_minutes is None:
+                connection.execute("ROLLBACK")
+                return None
             _expire_stale_holds(connection, now_text)
+
+            existing = connection.execute(
+                """
+                SELECT time_id, duration_minutes FROM bookings
+                WHERE date_id = ? AND status IN (?, ?, ?)
+                  AND NOT (user_id = ? AND status = ?)
+                """,
+                (
+                    slot_date["id"],
+                    STATUS_HELD,
+                    STATUS_PENDING,
+                    STATUS_CONFIRMED,
+                    user_id,
+                    STATUS_HELD,
+                ),
+            ).fetchall()
+            for row in existing:
+                existing_start = time_to_minutes(str(row["time_id"]))
+                if existing_start is None:
+                    continue
+                existing_end = existing_start + int(row["duration_minutes"] or 60)
+                if overlaps(start_minutes, start_minutes + duration, existing_start, existing_end):
+                    connection.execute("ROLLBACK")
+                    return None
+
             connection.execute(
                 """
                 UPDATE bookings
@@ -120,15 +175,18 @@ def create_hold(
                 """
                 INSERT INTO bookings
                     (user_id, username, service_id, service_name,
+                     price_label, duration_minutes,
                      date_id, date_label, time_id, time_label,
                      status, expires_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
                     username,
                     service["id"],
                     service["name"],
+                    str(service.get("price", "")),
+                    duration,
                     slot_date["id"],
                     slot_date["label"],
                     slot_time["id"],
@@ -145,6 +203,14 @@ def create_hold(
                 (booking_id,),
             ).fetchone()
             connection.execute("COMMIT")
+            logger.info(
+                "hold_created id=%s user=%s date=%s time=%s duration=%s",
+                booking_id,
+                user_id,
+                slot_date["id"],
+                slot_time["id"],
+                duration,
+            )
             return dict(row) if row is not None else None
         except sqlite3.IntegrityError:
             connection.execute("ROLLBACK")
@@ -223,6 +289,7 @@ def submit_hold(booking_id: int, user_id: int) -> dict | None:
                 (booking_id,),
             ).fetchone()
             connection.execute("COMMIT")
+            logger.info("hold_submitted id=%s user=%s", booking_id, user_id)
             return dict(row) if row is not None else None
         except Exception:
             connection.execute("ROLLBACK")
@@ -250,6 +317,99 @@ def get_occupied_time_ids(date_id: str) -> set[str]:
             (date_id, STATUS_HELD, STATUS_PENDING, STATUS_CONFIRMED),
         ).fetchall()
         return {row["time_id"] for row in rows}
+
+
+def get_occupied_intervals(date_id: str) -> list[tuple[int, int]]:
+    expire_stale_holds()
+    with closing(_connect()) as connection:
+        rows = connection.execute(
+            """
+            SELECT time_id, duration_minutes FROM bookings
+            WHERE date_id = ? AND status IN (?, ?, ?)
+            ORDER BY time_id
+            """,
+            (date_id, STATUS_HELD, STATUS_PENDING, STATUS_CONFIRMED),
+        ).fetchall()
+    intervals: list[tuple[int, int]] = []
+    for row in rows:
+        start = time_to_minutes(str(row["time_id"]))
+        if start is None:
+            continue
+        intervals.append((start, start + int(row["duration_minutes"] or 60)))
+    return intervals
+
+
+def get_bookings(
+    status: str | None = None,
+    limit: int = 10,
+    offset: int = 0,
+) -> list[dict]:
+    expire_stale_holds()
+    query = "SELECT * FROM bookings"
+    params: list[object] = []
+    if status is not None:
+        query += " WHERE status = ?"
+        params.append(status)
+    query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    with closing(_connect()) as connection:
+        rows = connection.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+
+def count_bookings(status: str | None = None) -> int:
+    expire_stale_holds()
+    query = "SELECT COUNT(*) AS total FROM bookings"
+    params: list[object] = []
+    if status is not None:
+        query += " WHERE status = ?"
+        params.append(status)
+    with closing(_connect()) as connection:
+        row = connection.execute(query, params).fetchone()
+        return int(row["total"]) if row is not None else 0
+
+
+def cancel_user_booking(booking_id: int, user_id: int) -> dict | None:
+    with closing(_connect()) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            now = _now_utc()
+            now_text = _format_utc(now)
+            row = connection.execute(
+                "SELECT * FROM bookings WHERE id = ? AND user_id = ?",
+                (booking_id, user_id),
+            ).fetchone()
+            if row is None or row["status"] not in (STATUS_PENDING, STATUS_CONFIRMED):
+                connection.execute("COMMIT")
+                return None
+            if not can_cancel(dict(row), now=now):
+                connection.execute("COMMIT")
+                return None
+            connection.execute(
+                """
+                UPDATE bookings
+                SET status = ?, expires_at = NULL, updated_at = ?
+                WHERE id = ? AND user_id = ? AND status IN (?, ?)
+                """,
+                (
+                    STATUS_CANCELLED,
+                    now_text,
+                    booking_id,
+                    user_id,
+                    STATUS_PENDING,
+                    STATUS_CONFIRMED,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM bookings WHERE id = ?",
+                (booking_id,),
+            ).fetchone()
+            connection.execute("COMMIT")
+            logger.info("booking_cancelled id=%s user=%s", booking_id, user_id)
+            return dict(updated) if updated is not None else None
+        except Exception:
+            connection.execute("ROLLBACK")
+            raise
 
 
 def get_user_bookings(user_id: int, limit: int = 20) -> list[dict]:
@@ -296,6 +456,8 @@ def confirm_booking(booking_id: int) -> bool:
                 (STATUS_CONFIRMED, now_text, booking_id, STATUS_PENDING),
             )
             connection.execute("COMMIT")
+            if cursor.rowcount:
+                logger.info("booking_confirmed id=%s", booking_id)
             return cursor.rowcount > 0
         except Exception:
             connection.execute("ROLLBACK")
@@ -316,6 +478,8 @@ def reject_booking(booking_id: int) -> bool:
                 (STATUS_REJECTED, now_text, booking_id, STATUS_PENDING),
             )
             connection.execute("COMMIT")
+            if cursor.rowcount:
+                logger.info("booking_rejected id=%s", booking_id)
             return cursor.rowcount > 0
         except Exception:
             connection.execute("ROLLBACK")

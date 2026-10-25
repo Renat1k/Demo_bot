@@ -10,10 +10,18 @@ from telegram.ext import (
 )
 
 from config import is_admin
-from database import confirm_booking, get_booking, get_pending_bookings, reject_booking
+from database import (
+    confirm_booking,
+    count_bookings,
+    get_booking,
+    get_bookings,
+    reject_booking,
+)
+from notifications import notify_client_status
 from keyboards import (
     CB_ADMIN,
     CB_ADMIN_REQUESTS,
+    CB_ADMIN_REQUESTS_QUERY_PREFIX,
     CB_ADMIN_SCHEDULE,
     CB_ADMIN_SETTINGS,
     CB_MASTER_ACTIONS_PREFIX,
@@ -22,16 +30,12 @@ from keyboards import (
     CB_MASTER_RESCHEDULE_PREFIX,
     CB_REQUEST_VIEW_PREFIX,
     admin_menu_keyboard,
+    admin_requests_keyboard,
     back_home_keyboard,
     master_actions_keyboard,
-    request_list_keyboard,
 )
 from texts import (
     ADMIN_PANEL,
-    ADMIN_REQUESTS_EMPTY,
-    ADMIN_REQUESTS_TITLE,
-    ADMIN_SCHEDULE,
-    ADMIN_SETTINGS,
     ALERT_BOOKING_PROCESSED,
     ALERT_REQUEST_NOT_FOUND,
     MASTER_ACTIONS_TITLE,
@@ -39,8 +43,15 @@ from texts import (
     MASTER_REJECTED,
     MASTER_RESCHEDULE_STUB,
     NO_ACCESS,
+    admin_requests_empty,
+    admin_requests_title,
+    admin_schedule_text,
+    admin_settings_text,
 )
 from .common import safe_edit_text
+
+REQUESTS_PAGE_SIZE = 5
+REQUESTS_FILTERS = ("pending", "confirmed", "all")
 
 
 def _user_id(update: Update) -> int | None:
@@ -72,19 +83,47 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await safe_edit_text(query, ADMIN_PANEL, admin_menu_keyboard())
 
 
+def _parse_requests_query(data: str) -> tuple[str, int]:
+    if data == CB_ADMIN_REQUESTS:
+        return "pending", 1
+    suffix = data.removeprefix(CB_ADMIN_REQUESTS_QUERY_PREFIX)
+    parts = suffix.split(":")
+    if len(parts) != 2:
+        return "pending", 1
+    filter_key = parts[0] if parts[0] in REQUESTS_FILTERS else "pending"
+    try:
+        page = int(parts[1])
+    except ValueError:
+        page = 1
+    return filter_key, max(1, page)
+
+
 async def show_requests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _check_admin_callback(update):
         return
     query = update.callback_query
-    bookings = get_pending_bookings()
+    filter_key, page = _parse_requests_query(query.data)
+    status = None if filter_key == "all" else filter_key
+    total = count_bookings(status)
+    pages = max(1, (total + REQUESTS_PAGE_SIZE - 1) // REQUESTS_PAGE_SIZE)
+    page = min(page, pages)
+    bookings = get_bookings(
+        status,
+        limit=REQUESTS_PAGE_SIZE,
+        offset=(page - 1) * REQUESTS_PAGE_SIZE,
+    )
     await query.answer()
     if not bookings:
-        await safe_edit_text(query, ADMIN_REQUESTS_EMPTY, back_home_keyboard(CB_ADMIN))
+        await safe_edit_text(
+            query,
+            admin_requests_empty(filter_key),
+            admin_requests_keyboard([], filter_key, page, pages),
+        )
         return
     await safe_edit_text(
         query,
-        ADMIN_REQUESTS_TITLE,
-        request_list_keyboard(bookings, back_callback=CB_ADMIN),
+        admin_requests_title(filter_key, total, page, pages),
+        admin_requests_keyboard(bookings, filter_key, page, pages),
     )
 
 
@@ -93,7 +132,7 @@ async def show_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     query = update.callback_query
     await query.answer()
-    await safe_edit_text(query, ADMIN_SCHEDULE, back_home_keyboard(CB_ADMIN))
+    await safe_edit_text(query, admin_schedule_text(), back_home_keyboard(CB_ADMIN))
 
 
 async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -101,7 +140,7 @@ async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     query = update.callback_query
     await query.answer()
-    await safe_edit_text(query, ADMIN_SETTINGS, back_home_keyboard(CB_ADMIN))
+    await safe_edit_text(query, admin_settings_text(), back_home_keyboard(CB_ADMIN))
 
 
 async def show_master_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -122,6 +161,7 @@ async def show_master_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def _show_master_result(
     update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
     text: str,
     callback_prefix: str,
     action: str,
@@ -145,6 +185,9 @@ async def _show_master_result(
         await query.answer(ALERT_BOOKING_PROCESSED, show_alert=True)
         return
     await query.answer()
+    updated_booking = get_booking(request_id)
+    if updated_booking is not None:
+        await notify_client_status(context.bot, updated_booking, updated_booking["status"])
     await safe_edit_text(
         query,
         text,
@@ -155,6 +198,7 @@ async def _show_master_result(
 async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _show_master_result(
         update,
+        context,
         MASTER_CONFIRMED,
         CB_MASTER_CONFIRM_PREFIX,
         "confirm",
@@ -164,6 +208,7 @@ async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def reject_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _show_master_result(
         update,
+        context,
         MASTER_REJECTED,
         CB_MASTER_REJECT_PREFIX,
         "reject",
@@ -211,6 +256,15 @@ def register(application: Application) -> None:
     )
     application.add_handler(
         CallbackQueryHandler(show_requests, pattern=rf"^{re.escape(CB_ADMIN_REQUESTS)}$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            show_requests,
+            pattern=(
+                rf"^{re.escape(CB_ADMIN_REQUESTS_QUERY_PREFIX)}"
+                r"(pending|confirmed|all):[0-9]+$"
+            ),
+        )
     )
     application.add_handler(
         CallbackQueryHandler(show_schedule, pattern=rf"^{re.escape(CB_ADMIN_SCHEDULE)}$")

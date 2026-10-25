@@ -6,6 +6,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     healthCheckPath: /health
+    # SQLite на free-плані тимчасова. Для production потрібен paid instance
+    # із persistent disk, наприклад mountPath: /var/data та DB_PATH=/var/data/bot.db.
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
