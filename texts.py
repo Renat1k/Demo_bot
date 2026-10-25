@@ -21,6 +21,12 @@ BTN_SCHEDULE = "🗓 Розклад"
 BTN_SETTINGS = "⚙️ Налаштування"
 BTN_BACK = "⬅️ Назад"
 BTN_HOME = "🏠 Головне меню"
+BTN_VIEW_REQUEST = "📄 Переглянути заявку"
+BTN_CONFIRM_BOOKING = "✅ Підтвердити запис"
+BTN_MASTER_ACTIONS = "🛠 Дії майстра"
+BTN_MASTER_CONFIRM = "✅ Підтвердити"
+BTN_MASTER_REJECT = "❌ Відхилити"
+BTN_MASTER_RESCHEDULE = "🕒 Запропонувати інший час"
 
 START = (
     "👋 <b>Вітаю!</b>\n\n"
@@ -40,13 +46,36 @@ HELP = (
 BOOKING_STUB = (
     "📅 <b>Запис</b>\n\n"
     "🚧 Онлайн-запис ще в розробці.\n\n"
-    "Незабаром тут можна буде обрати послугу, майстра та зручний час."
+    "Інтерфейс вибору послуги, дати й часу вже підготовлено."
 )
 
 RECORDS_STUB = (
     "📋 <b>Мої записи</b>\n\n"
     "🚧 Онлайн-запис ще в розробці.\n\n"
-    "Тут з’являться ваші майбутні записи."
+    "Інтерфейс перегляду заявки вже підготовлено."
+)
+
+BOOKING_SERVICE_TITLE = (
+    "💇‍♀️ <b>Оберіть послугу</b>\n\n"
+    "Натисніть на потрібну послугу, щоб перейти до вибору дати."
+)
+
+BOOKING_DATE_TITLE = (
+    "📅 <b>Оберіть дату</b>\n\n"
+    "Доступні дати (демо):"
+)
+
+BOOKING_TIME_TITLE = (
+    "🕘 <b>Оберіть час</b>\n\n"
+    "Доступні слоти (демо):"
+)
+
+DEMO_NOTICE = "🚧 Демонстраційний інтерфейс. Дані поки не зберігаються."
+
+MASTER_ACTIONS_TITLE = (
+    "🛠 <b>Дії майстра</b>\n\n"
+    "Оберіть, що зробити із заявкою.\n\n"
+    f"{DEMO_NOTICE}"
 )
 
 ADMIN_PANEL = "⚙️ <b>Адмін-панель</b>\n\nОберіть потрібний розділ:"
@@ -54,7 +83,7 @@ ADMIN_PANEL = "⚙️ <b>Адмін-панель</b>\n\nОберіть потр�
 ADMIN_REQUESTS = (
     "📋 <b>Заявки</b>\n\n"
     "🚧 Розділ у розробці.\n\n"
-    "Тут з’являться заявки клієнтів."
+    "Інтерфейс перегляду заявки та дій майстра вже підготовлено."
 )
 
 ADMIN_SCHEDULE = (
@@ -73,12 +102,50 @@ NO_ACCESS = "⛔ Доступ лише для адміністратора."
 ERROR = "😔 Сталася помилка. Спробуйте ще раз трохи пізніше."
 
 
+def service_button_label(name: str, price: str) -> str:
+    return f"{name} · {price}"
+
+
+def booking_summary_text(
+    service: str = "—",
+    date: str = "—",
+    time: str = "—",
+) -> str:
+    return (
+        "📄 <b>Перевірте заявку</b>\n\n"
+        f"<b>Послуга:</b> {escape(service)}\n"
+        f"<b>Дата:</b> {escape(date)}\n"
+        f"<b>Час:</b> {escape(time)}\n\n"
+        f"{DEMO_NOTICE}"
+    )
+
+
+def request_view_text(
+    request_id: str = "—",
+    service: str = "—",
+    date: str = "—",
+    time: str = "—",
+    status: str = "—",
+) -> str:
+    return (
+        f"📄 <b>Заявка №{escape(request_id)}</b>\n\n"
+        f"<b>Послуга:</b> {escape(service)}\n"
+        f"<b>Бажана дата:</b> {escape(date)}\n"
+        f"<b>Бажаний час:</b> {escape(time)}\n"
+        f"<b>Статус:</b> {escape(status)}\n\n"
+        f"{DEMO_NOTICE}"
+    )
+
+
 def services_text() -> str:
     lines = [
         "💇‍♀️ <b>Послуги та ціни</b>",
         "",
     ]
-    lines.extend(f"• {escape(name)} — {escape(price)}" for name, price in SERVICES)
+    lines.extend(
+        f"• {escape(name)} — {escape(price)}"
+        for _service_id, name, price in SERVICES
+    )
     lines.extend(
         [
             "",

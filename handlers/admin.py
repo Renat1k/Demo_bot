@@ -15,7 +15,7 @@ from keyboards import (
     CB_ADMIN_SCHEDULE,
     CB_ADMIN_SETTINGS,
     admin_menu_keyboard,
-    admin_section_keyboard,
+    back_home_keyboard,
 )
 from texts import (
     ADMIN_PANEL,
@@ -53,7 +53,7 @@ async def show_requests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     query = update.callback_query
     await query.answer()
-    await safe_edit_text(query, ADMIN_REQUESTS, admin_section_keyboard())
+    await safe_edit_text(query, ADMIN_REQUESTS, back_home_keyboard(CB_ADMIN))
 
 
 async def show_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -61,7 +61,7 @@ async def show_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     query = update.callback_query
     await query.answer()
-    await safe_edit_text(query, ADMIN_SCHEDULE, admin_section_keyboard())
+    await safe_edit_text(query, ADMIN_SCHEDULE, back_home_keyboard(CB_ADMIN))
 
 
 async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -69,7 +69,7 @@ async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     query = update.callback_query
     await query.answer()
-    await safe_edit_text(query, ADMIN_SETTINGS, admin_section_keyboard())
+    await safe_edit_text(query, ADMIN_SETTINGS, back_home_keyboard(CB_ADMIN))
 
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
