@@ -30,6 +30,10 @@ def _read_port() -> int:
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = _read_admin_chat_id()
 PORT = _read_port()
+DB_PATH = os.environ.get("DB_PATH", "bot.db").strip() or "bot.db"
+HOLD_TTL_SECONDS = 300
+TIMEZONE = "Europe/Kyiv"
+BOOKING_FLOW_KEY = "booking_flow"
 
 SALON_NAME = "Найкраща"
 CITY = "Київ"
@@ -62,8 +66,6 @@ DEMO_TIMES = (
     ("t4", "16:00"),
     ("t5", "18:00"),
 )
-
-DEMO_REQUEST_ID = "demo"
 
 
 def is_admin(user_id: int | None) -> bool:

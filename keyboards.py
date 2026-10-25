@@ -1,6 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from config import DEMO_DATES, DEMO_REQUEST_ID, DEMO_TIMES, SERVICES
+from config import DEMO_DATES, DEMO_TIMES, SERVICES
 import texts
 
 CB_MAIN = "nav:main"
@@ -16,8 +16,9 @@ CB_ADMIN_SETTINGS = "admin:settings"
 
 CB_BOOK_DATES = "booking:dates"
 CB_BOOK_TIMES = "booking:times"
-CB_BOOK_PREVIEW = "booking:preview"
 CB_BOOK_CONFIRM = "booking:confirm"
+CB_BOOK_CANCEL = "booking:cancel"
+CB_BOOK_HOME = "booking:home"
 
 CB_SERVICE_PREFIX = "booking:service:"
 CB_DATE_PREFIX = "booking:date:"
@@ -101,45 +102,70 @@ def date_selection_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def time_selection_keyboard() -> InlineKeyboardMarkup:
+def time_selection_keyboard(
+    available_time_ids: set[str] | None = None,
+) -> InlineKeyboardMarkup:
+    times = [
+        (time_id, label)
+        for time_id, label in DEMO_TIMES
+        if available_time_ids is None or time_id in available_time_ids
+    ]
     rows = [
         [
             InlineKeyboardButton(
                 label,
                 callback_data=f"{CB_TIME_PREFIX}{time_id}",
             )
-            for time_id, label in DEMO_TIMES[index : index + 3]
+            for time_id, label in times[index : index + 3]
         ]
-        for index in range(0, len(DEMO_TIMES), 3)
+        for index in range(0, len(times), 3)
     ]
     rows.extend(_navigation_rows(CB_BOOK_DATES))
     return InlineKeyboardMarkup(rows)
 
 
 def booking_summary_keyboard() -> InlineKeyboardMarkup:
-    rows = [
+    return InlineKeyboardMarkup(
         [
-            InlineKeyboardButton(
-                texts.BTN_CONFIRM_BOOKING,
-                callback_data=CB_BOOK_CONFIRM,
-            )
+            [
+                InlineKeyboardButton(
+                    texts.BTN_CONFIRM_BOOKING,
+                    callback_data=CB_BOOK_CONFIRM,
+                )
+            ],
+            [InlineKeyboardButton(texts.BTN_BACK, callback_data=CB_BOOK_TIMES)],
+            [InlineKeyboardButton(texts.BTN_CANCEL_BOOKING, callback_data=CB_BOOK_CANCEL)],
+            [InlineKeyboardButton(texts.BTN_HOME, callback_data=CB_BOOK_HOME)],
         ]
-    ]
-    rows.extend(_navigation_rows(CB_BOOK_TIMES))
-    return InlineKeyboardMarkup(rows)
+    )
+
+
+def booking_success_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(texts.BTN_RECORDS, callback_data=CB_RECORDS)],
+            [InlineKeyboardButton(texts.BTN_HOME, callback_data=CB_MAIN)],
+        ]
+    )
 
 
 def request_list_keyboard(
-    request_id: str = DEMO_REQUEST_ID,
+    requests: list[dict] | None = None,
     back_callback: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
-                texts.BTN_VIEW_REQUEST,
-                callback_data=f"{CB_REQUEST_VIEW_PREFIX}{request_id}",
+                texts.request_button_label(
+                    booking["id"],
+                    booking["service_name"],
+                    booking["date_label"],
+                    booking["time_label"],
+                ),
+                callback_data=f"{CB_REQUEST_VIEW_PREFIX}{booking['id']}",
             )
         ]
+        for booking in (requests or [])
     ]
     if back_callback is None:
         rows.append([InlineKeyboardButton(texts.BTN_HOME, callback_data=CB_MAIN)])
@@ -149,7 +175,7 @@ def request_list_keyboard(
 
 
 def request_view_keyboard(
-    request_id: str = DEMO_REQUEST_ID,
+    request_id: int | str,
     back_callback: str = CB_RECORDS,
     master: bool = False,
 ) -> InlineKeyboardMarkup:
@@ -167,7 +193,7 @@ def request_view_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
-def master_actions_keyboard(request_id: str = DEMO_REQUEST_ID) -> InlineKeyboardMarkup:
+def master_actions_keyboard(request_id: int | str) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(

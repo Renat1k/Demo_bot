@@ -1,15 +1,34 @@
 import re
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from telegram import CallbackQuery, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
-from config import DEMO_DATES, DEMO_REQUEST_ID, DEMO_TIMES, SERVICES, is_admin
+from config import (
+    BOOKING_FLOW_KEY,
+    DEMO_DATES,
+    DEMO_TIMES,
+    SERVICES,
+    TIMEZONE,
+    is_admin,
+)
+from database import (
+    create_hold,
+    get_booking,
+    get_occupied_time_ids,
+    get_user_bookings,
+    release_hold,
+    release_user_holds,
+    submit_hold,
+)
 from keyboards import (
     CB_ADMIN_REQUESTS,
     CB_BOOK,
+    CB_BOOK_CANCEL,
     CB_BOOK_CONFIRM,
     CB_BOOK_DATES,
-    CB_BOOK_PREVIEW,
+    CB_BOOK_HOME,
     CB_BOOK_TIMES,
     CB_CONTACTS,
     CB_DATE_PREFIX,
@@ -18,10 +37,11 @@ from keyboards import (
     CB_SERVICE_PREFIX,
     CB_SERVICES,
     CB_TIME_PREFIX,
-    back_home_keyboard,
+    booking_success_keyboard,
     booking_summary_keyboard,
     date_selection_keyboard,
     home_keyboard,
+    main_menu_keyboard,
     request_list_keyboard,
     request_view_keyboard,
     service_selection_keyboard,
@@ -29,17 +49,22 @@ from keyboards import (
 )
 from texts import (
     ALERT_DATE_NOT_FOUND,
+    ALERT_HOLD_EXPIRED,
     ALERT_REQUEST_NOT_FOUND,
     ALERT_SELECT_DATE,
     ALERT_SELECT_SERVICE,
     ALERT_SERVICE_NOT_FOUND,
+    ALERT_SLOT_TAKEN,
     ALERT_TIME_NOT_FOUND,
-    BOOKING_CONFIRM_STUB,
     BOOKING_DATE_TITLE,
     BOOKING_SERVICE_TITLE,
+    BOOKING_TIME_EMPTY,
     BOOKING_TIME_TITLE,
-    RECORDS_STUB,
-    STATUS_NEW,
+    MAIN_MENU,
+    RECORDS_EMPTY,
+    RECORDS_TITLE,
+    booking_status_label,
+    booking_submitted_text,
     booking_summary_text,
     contacts_text,
     request_view_text,
@@ -47,7 +72,7 @@ from texts import (
 )
 from .common import safe_edit_text
 
-BOOKING_KEY = "demo_booking"
+BOOKING_KEY = BOOKING_FLOW_KEY
 SERVICES_BY_ID = {
     service_id: {"id": service_id, "name": name, "price": price}
     for service_id, name, price in SERVICES
@@ -64,6 +89,20 @@ def _booking(context: ContextTypes.DEFAULT_TYPE) -> dict:
     return context.user_data.get(BOOKING_KEY, {})
 
 
+def _format_hold_until(value: str | None) -> str:
+    if not value:
+        return "—"
+    try:
+        local = (
+            datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+            .replace(tzinfo=timezone.utc)
+            .astimezone(ZoneInfo(TIMEZONE))
+        )
+        return local.strftime("%H:%M")
+    except (ValueError, ZoneInfoNotFoundError):
+        return f"{value[11:16]} UTC"
+
+
 async def _render_services(query: CallbackQuery) -> None:
     await safe_edit_text(query, BOOKING_SERVICE_TITLE, service_selection_keyboard())
 
@@ -72,8 +111,13 @@ async def _render_dates(query: CallbackQuery) -> None:
     await safe_edit_text(query, BOOKING_DATE_TITLE, date_selection_keyboard())
 
 
-async def _render_times(query: CallbackQuery) -> None:
-    await safe_edit_text(query, BOOKING_TIME_TITLE, time_selection_keyboard())
+async def _render_times(query: CallbackQuery, date_id: str) -> None:
+    occupied = get_occupied_time_ids(date_id)
+    available = {time_id for time_id, _label in DEMO_TIMES} - occupied
+    text = BOOKING_TIME_TITLE
+    if not available:
+        text = f"{text}\n\n{BOOKING_TIME_EMPTY}"
+    await safe_edit_text(query, text, time_selection_keyboard(available))
 
 
 async def _render_preview(query: CallbackQuery, booking: dict) -> None:
@@ -81,14 +125,29 @@ async def _render_preview(query: CallbackQuery, booking: dict) -> None:
         service=booking["service"]["name"],
         date=booking["date"]["label"],
         time=booking["time"]["label"],
+        hold_until=_format_hold_until(booking.get("expires_at")),
     )
     await safe_edit_text(query, text, booking_summary_keyboard())
+
+
+def _release_current_hold(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    booking = _booking(context)
+    hold_id = booking.get("hold_id")
+    user_id = _user_id(update)
+    if hold_id and user_id is not None:
+        release_hold(int(hold_id), user_id)
+    booking.pop("hold_id", None)
+    booking.pop("expires_at", None)
+    booking.pop("time", None)
 
 
 async def show_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None:
         return
+    user_id = _user_id(update)
+    if user_id is not None:
+        release_user_holds(user_id)
     context.user_data.pop(BOOKING_KEY, None)
     await query.answer()
     await _render_services(query)
@@ -104,6 +163,9 @@ async def select_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.answer(ALERT_SERVICE_NOT_FOUND, show_alert=True)
         await _render_services(query)
         return
+    user_id = _user_id(update)
+    if user_id is not None:
+        release_user_holds(user_id)
     await query.answer()
     context.user_data[BOOKING_KEY] = {"service": service}
     await _render_dates(query)
@@ -124,10 +186,10 @@ async def select_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.answer(ALERT_DATE_NOT_FOUND, show_alert=True)
         await _render_dates(query)
         return
+    _release_current_hold(update, context)
     await query.answer()
     booking["date"] = {"id": date_id, "label": date_label}
-    booking.pop("time", None)
-    await _render_times(query)
+    await _render_times(query, date_id)
 
 
 async def select_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -147,10 +209,30 @@ async def select_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     time_label = TIMES_BY_ID.get(time_id)
     if time_label is None:
         await query.answer(ALERT_TIME_NOT_FOUND, show_alert=True)
-        await _render_times(query)
+        await _render_times(query, booking["date"]["id"])
         return
+
+    user_id = _user_id(update)
+    if user_id is None:
+        await query.answer()
+        return
+    username = update.effective_user.username if update.effective_user else ""
+    hold = create_hold(
+        user_id=user_id,
+        username=username or "",
+        service=booking["service"],
+        slot_date=booking["date"],
+        slot_time={"id": time_id, "label": time_label},
+    )
+    if hold is None:
+        await query.answer(ALERT_SLOT_TAKEN, show_alert=True)
+        await _render_times(query, booking["date"]["id"])
+        return
+
     await query.answer()
     booking["time"] = {"id": time_id, "label": time_label}
+    booking["hold_id"] = hold["id"]
+    booking["expires_at"] = hold["expires_at"]
     await _render_preview(query, booking)
 
 
@@ -163,6 +245,7 @@ async def show_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await query.answer(ALERT_SELECT_SERVICE, show_alert=True)
         await _render_services(query)
         return
+    _release_current_hold(update, context)
     await query.answer()
     await _render_dates(query)
 
@@ -180,29 +263,9 @@ async def show_times(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await query.answer(ALERT_SELECT_DATE, show_alert=True)
         await _render_dates(query)
         return
+    _release_current_hold(update, context)
     await query.answer()
-    await _render_times(query)
-
-
-async def show_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query is None:
-        return
-    booking = _booking(context)
-    if "service" not in booking:
-        await query.answer(ALERT_SELECT_SERVICE, show_alert=True)
-        await _render_services(query)
-        return
-    if "date" not in booking:
-        await query.answer(ALERT_SELECT_DATE, show_alert=True)
-        await _render_dates(query)
-        return
-    if "time" not in booking:
-        await query.answer(ALERT_TIME_NOT_FOUND, show_alert=True)
-        await _render_times(query)
-        return
-    await query.answer()
-    await _render_preview(query, booking)
+    await _render_times(query, booking["date"]["id"])
 
 
 async def confirm_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -210,23 +273,65 @@ async def confirm_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if query is None:
         return
     booking = _booking(context)
-    if "service" not in booking:
-        await query.answer(ALERT_SELECT_SERVICE, show_alert=True)
-        await _render_services(query)
+    hold_id = booking.get("hold_id")
+    user_id = _user_id(update)
+    if not hold_id or user_id is None:
+        await query.answer(ALERT_HOLD_EXPIRED, show_alert=True)
+        if "date" in booking:
+            await _render_times(query, booking["date"]["id"])
+        else:
+            await _render_services(query)
         return
-    if "date" not in booking:
-        await query.answer(ALERT_SELECT_DATE, show_alert=True)
-        await _render_dates(query)
+
+    submitted = submit_hold(int(hold_id), user_id)
+    if submitted is None:
+        booking.pop("hold_id", None)
+        booking.pop("expires_at", None)
+        booking.pop("time", None)
+        await query.answer(ALERT_HOLD_EXPIRED, show_alert=True)
+        if "date" in booking:
+            await _render_times(query, booking["date"]["id"])
+        else:
+            await _render_services(query)
         return
-    if "time" not in booking:
-        await query.answer(ALERT_TIME_NOT_FOUND, show_alert=True)
-        await _render_times(query)
-        return
+
+    context.user_data.pop(BOOKING_KEY, None)
     await query.answer()
     await safe_edit_text(
         query,
-        BOOKING_CONFIRM_STUB,
-        back_home_keyboard(CB_BOOK_PREVIEW),
+        booking_submitted_text(
+            booking_id=submitted["id"],
+            status=booking_status_label(submitted["status"]),
+        ),
+        booking_success_keyboard(),
+    )
+
+
+async def cancel_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+    user_id = _user_id(update)
+    if user_id is not None:
+        release_user_holds(user_id)
+    context.user_data.pop(BOOKING_KEY, None)
+    await query.answer()
+    await _render_services(query)
+
+
+async def booking_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+    user_id = _user_id(update)
+    if user_id is not None:
+        release_user_holds(user_id)
+    context.user_data.pop(BOOKING_KEY, None)
+    await query.answer()
+    await safe_edit_text(
+        query,
+        MAIN_MENU,
+        main_menu_keyboard(is_admin(user_id)),
     )
 
 
@@ -242,8 +347,17 @@ async def show_records(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     query = update.callback_query
     if query is None:
         return
+    user_id = _user_id(update)
+    bookings = get_user_bookings(user_id) if user_id is not None else []
     await query.answer()
-    await safe_edit_text(query, RECORDS_STUB, request_list_keyboard())
+    if not bookings:
+        await safe_edit_text(query, RECORDS_EMPTY, home_keyboard())
+        return
+    await safe_edit_text(
+        query,
+        RECORDS_TITLE,
+        request_list_keyboard(bookings),
+    )
 
 
 async def show_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -258,29 +372,34 @@ async def show_request_view(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     query = update.callback_query
     if query is None:
         return
-    request_id = query.data.removeprefix(CB_REQUEST_VIEW_PREFIX)
-    if request_id != DEMO_REQUEST_ID:
+    try:
+        request_id = int(query.data.removeprefix(CB_REQUEST_VIEW_PREFIX))
+    except ValueError:
         await query.answer(ALERT_REQUEST_NOT_FOUND, show_alert=True)
         return
-    admin = is_admin(_user_id(update))
-    service = SERVICES[0]
-    date = DEMO_DATES[0]
-    time = DEMO_TIMES[1]
+
+    booking = get_booking(request_id)
+    user_id = _user_id(update)
+    admin = is_admin(user_id)
+    if booking is None or (not admin and booking["user_id"] != user_id):
+        await query.answer(ALERT_REQUEST_NOT_FOUND, show_alert=True)
+        return
+
     text = request_view_text(
-        request_id=DEMO_REQUEST_ID,
-        service=service[1],
-        date=date[1],
-        time=time[1],
-        status=STATUS_NEW,
+        request_id=booking["id"],
+        service=booking["service_name"],
+        date=booking["date_label"],
+        time=booking["time_label"],
+        status=booking_status_label(booking["status"]),
     )
     await query.answer()
     await safe_edit_text(
         query,
         text,
         request_view_keyboard(
-            request_id=DEMO_REQUEST_ID,
+            request_id=booking["id"],
             back_callback=CB_ADMIN_REQUESTS if admin else CB_RECORDS,
-            master=admin,
+            master=admin and booking["status"] == "pending",
         ),
     )
 
@@ -323,14 +442,17 @@ def register(application: Application) -> None:
         )
     )
     application.add_handler(
-        CallbackQueryHandler(show_preview, pattern=rf"^{re.escape(CB_BOOK_PREVIEW)}$")
+        CallbackQueryHandler(confirm_booking, pattern=rf"^{re.escape(CB_BOOK_CONFIRM)}$")
     )
     application.add_handler(
-        CallbackQueryHandler(confirm_booking, pattern=rf"^{re.escape(CB_BOOK_CONFIRM)}$")
+        CallbackQueryHandler(cancel_booking, pattern=rf"^{re.escape(CB_BOOK_CANCEL)}$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(booking_home, pattern=rf"^{re.escape(CB_BOOK_HOME)}$")
     )
     application.add_handler(
         CallbackQueryHandler(
             show_request_view,
-            pattern=rf"^{re.escape(CB_REQUEST_VIEW_PREFIX)}[A-Za-z0-9_-]+$",
+            pattern=rf"^{re.escape(CB_REQUEST_VIEW_PREFIX)}[0-9]+$",
         )
     )

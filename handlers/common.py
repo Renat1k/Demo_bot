@@ -10,7 +10,8 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from config import is_admin
+from config import BOOKING_FLOW_KEY, is_admin
+from database import release_user_holds
 from keyboards import CB_MAIN, main_menu_keyboard
 from texts import ERROR, HELP, MAIN_MENU, START, UNKNOWN_CALLBACK
 
@@ -32,10 +33,18 @@ def _user_id(update: Update) -> int | None:
     return update.effective_user.id if update.effective_user else None
 
 
+def _reset_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = _user_id(update)
+    if user_id is not None:
+        release_user_holds(user_id)
+    context.user_data.pop(BOOKING_FLOW_KEY, None)
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if message is None:
         return
+    _reset_booking(update, context)
     await message.reply_text(
         START,
         reply_markup=main_menu_keyboard(is_admin(_user_id(update))),
@@ -47,6 +56,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     message = update.effective_message
     if message is None:
         return
+    _reset_booking(update, context)
     await message.reply_text(
         MAIN_MENU,
         reply_markup=main_menu_keyboard(is_admin(_user_id(update))),
@@ -70,6 +80,7 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if query is None:
         return
     await query.answer()
+    _reset_booking(update, context)
     await safe_edit_text(
         query,
         MAIN_MENU,

@@ -9,7 +9,8 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from config import DEMO_REQUEST_ID, is_admin
+from config import is_admin
+from database import confirm_booking, get_booking, get_pending_bookings, reject_booking
 from keyboards import (
     CB_ADMIN,
     CB_ADMIN_REQUESTS,
@@ -19,6 +20,7 @@ from keyboards import (
     CB_MASTER_CONFIRM_PREFIX,
     CB_MASTER_REJECT_PREFIX,
     CB_MASTER_RESCHEDULE_PREFIX,
+    CB_REQUEST_VIEW_PREFIX,
     admin_menu_keyboard,
     back_home_keyboard,
     master_actions_keyboard,
@@ -26,13 +28,15 @@ from keyboards import (
 )
 from texts import (
     ADMIN_PANEL,
-    ADMIN_REQUESTS,
+    ADMIN_REQUESTS_EMPTY,
+    ADMIN_REQUESTS_TITLE,
     ADMIN_SCHEDULE,
     ADMIN_SETTINGS,
+    ALERT_BOOKING_PROCESSED,
     ALERT_REQUEST_NOT_FOUND,
     MASTER_ACTIONS_TITLE,
-    MASTER_CONFIRM_STUB,
-    MASTER_REJECT_STUB,
+    MASTER_CONFIRMED,
+    MASTER_REJECTED,
     MASTER_RESCHEDULE_STUB,
     NO_ACCESS,
 )
@@ -53,6 +57,13 @@ async def _check_admin_callback(update: Update) -> bool:
     return True
 
 
+def _request_id(query_data: str, prefix: str) -> int | None:
+    try:
+        return int(query_data.removeprefix(prefix))
+    except ValueError:
+        return None
+
+
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _check_admin_callback(update):
         return
@@ -65,11 +76,15 @@ async def show_requests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not await _check_admin_callback(update):
         return
     query = update.callback_query
+    bookings = get_pending_bookings()
     await query.answer()
+    if not bookings:
+        await safe_edit_text(query, ADMIN_REQUESTS_EMPTY, back_home_keyboard(CB_ADMIN))
+        return
     await safe_edit_text(
         query,
-        ADMIN_REQUESTS,
-        request_list_keyboard(back_callback=CB_ADMIN),
+        ADMIN_REQUESTS_TITLE,
+        request_list_keyboard(bookings, back_callback=CB_ADMIN),
     )
 
 
@@ -93,9 +108,13 @@ async def show_master_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not await _check_admin_callback(update):
         return
     query = update.callback_query
-    request_id = query.data.removeprefix(CB_MASTER_ACTIONS_PREFIX)
-    if request_id != DEMO_REQUEST_ID:
+    request_id = _request_id(query.data, CB_MASTER_ACTIONS_PREFIX)
+    booking = get_booking(request_id) if request_id is not None else None
+    if booking is None:
         await query.answer(ALERT_REQUEST_NOT_FOUND, show_alert=True)
+        return
+    if booking["status"] != "pending":
+        await query.answer(ALERT_BOOKING_PROCESSED, show_alert=True)
         return
     await query.answer()
     await safe_edit_text(query, MASTER_ACTIONS_TITLE, master_actions_keyboard(request_id))
@@ -105,35 +124,69 @@ async def _show_master_result(
     update: Update,
     text: str,
     callback_prefix: str,
+    action: str,
 ) -> None:
     if not await _check_admin_callback(update):
         return
     query = update.callback_query
-    request_id = query.data.removeprefix(callback_prefix)
-    if request_id != DEMO_REQUEST_ID:
+    request_id = _request_id(query.data, callback_prefix)
+    booking = get_booking(request_id) if request_id is not None else None
+    if booking is None:
         await query.answer(ALERT_REQUEST_NOT_FOUND, show_alert=True)
+        return
+    if booking["status"] != "pending":
+        await query.answer(ALERT_BOOKING_PROCESSED, show_alert=True)
+        return
+    if action == "confirm":
+        updated = confirm_booking(request_id)
+    else:
+        updated = reject_booking(request_id)
+    if not updated:
+        await query.answer(ALERT_BOOKING_PROCESSED, show_alert=True)
         return
     await query.answer()
     await safe_edit_text(
         query,
         text,
-        back_home_keyboard(f"{CB_MASTER_ACTIONS_PREFIX}{request_id}"),
+        back_home_keyboard(f"{CB_REQUEST_VIEW_PREFIX}{request_id}"),
     )
 
 
 async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _show_master_result(update, MASTER_CONFIRM_STUB, CB_MASTER_CONFIRM_PREFIX)
+    await _show_master_result(
+        update,
+        MASTER_CONFIRMED,
+        CB_MASTER_CONFIRM_PREFIX,
+        "confirm",
+    )
 
 
 async def reject_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _show_master_result(update, MASTER_REJECT_STUB, CB_MASTER_REJECT_PREFIX)
+    await _show_master_result(
+        update,
+        MASTER_REJECTED,
+        CB_MASTER_REJECT_PREFIX,
+        "reject",
+    )
 
 
 async def reschedule_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _show_master_result(
-        update,
+    if not await _check_admin_callback(update):
+        return
+    query = update.callback_query
+    request_id = _request_id(query.data, CB_MASTER_RESCHEDULE_PREFIX)
+    booking = get_booking(request_id) if request_id is not None else None
+    if booking is None:
+        await query.answer(ALERT_REQUEST_NOT_FOUND, show_alert=True)
+        return
+    if booking["status"] != "pending":
+        await query.answer(ALERT_BOOKING_PROCESSED, show_alert=True)
+        return
+    await query.answer()
+    await safe_edit_text(
+        query,
         MASTER_RESCHEDULE_STUB,
-        CB_MASTER_RESCHEDULE_PREFIX,
+        back_home_keyboard(f"{CB_MASTER_ACTIONS_PREFIX}{request_id}"),
     )
 
 
@@ -168,24 +221,24 @@ def register(application: Application) -> None:
     application.add_handler(
         CallbackQueryHandler(
             show_master_actions,
-            pattern=rf"^{re.escape(CB_MASTER_ACTIONS_PREFIX)}[A-Za-z0-9_-]+$",
+            pattern=rf"^{re.escape(CB_MASTER_ACTIONS_PREFIX)}[0-9]+$",
         )
     )
     application.add_handler(
         CallbackQueryHandler(
             confirm_request,
-            pattern=rf"^{re.escape(CB_MASTER_CONFIRM_PREFIX)}[A-Za-z0-9_-]+$",
+            pattern=rf"^{re.escape(CB_MASTER_CONFIRM_PREFIX)}[0-9]+$",
         )
     )
     application.add_handler(
         CallbackQueryHandler(
             reject_request,
-            pattern=rf"^{re.escape(CB_MASTER_REJECT_PREFIX)}[A-Za-z0-9_-]+$",
+            pattern=rf"^{re.escape(CB_MASTER_REJECT_PREFIX)}[0-9]+$",
         )
     )
     application.add_handler(
         CallbackQueryHandler(
             reschedule_request,
-            pattern=rf"^{re.escape(CB_MASTER_RESCHEDULE_PREFIX)}[A-Za-z0-9_-]+$",
+            pattern=rf"^{re.escape(CB_MASTER_RESCHEDULE_PREFIX)}[0-9]+$",
         )
     )
