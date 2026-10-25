@@ -12,7 +12,7 @@ from telegram.ext import (
 
 from config import is_admin
 from keyboards import CB_MAIN, main_menu_keyboard
-from texts import ERROR, HELP, MAIN_MENU, START
+from texts import ERROR, HELP, MAIN_MENU, START, UNKNOWN_CALLBACK
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         await message.reply_text(ERROR)
     except TelegramError:
         logger.exception("Не вдалося надіслати повідомлення про помилку.")
+
+
+async def unknown_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer(UNKNOWN_CALLBACK, show_alert=True)
 
 
 def register(application: Application) -> None:

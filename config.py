@@ -63,6 +63,8 @@ DEMO_TIMES = (
     ("t5", "18:00"),
 )
 
+DEMO_REQUEST_ID = "demo"
+
 
 def is_admin(user_id: int | None) -> bool:
     return bool(ADMIN_CHAT_ID) and user_id == ADMIN_CHAT_ID

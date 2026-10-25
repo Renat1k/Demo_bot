@@ -1,6 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from config import DEMO_DATES, DEMO_TIMES, SERVICES
+from config import DEMO_DATES, DEMO_REQUEST_ID, DEMO_TIMES, SERVICES
 import texts
 
 CB_MAIN = "nav:main"
@@ -16,6 +16,7 @@ CB_ADMIN_SETTINGS = "admin:settings"
 
 CB_BOOK_DATES = "booking:dates"
 CB_BOOK_TIMES = "booking:times"
+CB_BOOK_PREVIEW = "booking:preview"
 CB_BOOK_CONFIRM = "booking:confirm"
 
 CB_SERVICE_PREFIX = "booking:service:"
@@ -129,8 +130,8 @@ def booking_summary_keyboard() -> InlineKeyboardMarkup:
 
 
 def request_list_keyboard(
-    request_id: str = "demo",
-    back_callback: str = CB_RECORDS,
+    request_id: str = DEMO_REQUEST_ID,
+    back_callback: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -140,12 +141,15 @@ def request_list_keyboard(
             )
         ]
     ]
-    rows.extend(_navigation_rows(back_callback))
+    if back_callback is None:
+        rows.append([InlineKeyboardButton(texts.BTN_HOME, callback_data=CB_MAIN)])
+    else:
+        rows.extend(_navigation_rows(back_callback))
     return InlineKeyboardMarkup(rows)
 
 
 def request_view_keyboard(
-    request_id: str = "demo",
+    request_id: str = DEMO_REQUEST_ID,
     back_callback: str = CB_RECORDS,
     master: bool = False,
 ) -> InlineKeyboardMarkup:
@@ -163,7 +167,7 @@ def request_view_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
-def master_actions_keyboard(request_id: str = "demo") -> InlineKeyboardMarkup:
+def master_actions_keyboard(request_id: str = DEMO_REQUEST_ID) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
