@@ -27,7 +27,7 @@ bot-2/
 │   └── app.js              # клієнт: запис, статуси, адмін-вкладка
 ├── docs/                   # скриншоти локального перевірочного прогону
 ├── texts.py                # українські тексти
-├── keyboards.py            # inline-клавіатури; кнопка Mini App
+├── keyboards.py            # inline-клавіатури, WebApp-кнопка й menu button
 ├── handlers/
 │   ├── common.py           # /start, /menu, /help, error handler
 │   ├── user.py             # бот: запис, мої записи, скасування
@@ -135,7 +135,11 @@ python bot.py
    `WEBAPP_URL=https://<host>/app` у змінних Render.
 4. У боті надішліть `/start` — у головному меню з'явиться
    **«📱 Відкрити Mini App»** з `web_app`-кнопкою.
-5. За бажанням у BotFather: `/setmenubutton` → URL Mini App, щоб відкривати
+5. Якщо `WEBAPP_URL` заданий як HTTPS, бот під час старту також викликає
+   `setChatMenuButton` і додає постійну кнопку **«📱 Відкрити Mini App»**
+   біля поля вводу повідомлення. Якщо Telegram API відхилить запит, inline-кнопка
+   в меню залишиться; помилка буде лише в логах.
+6. За бажанням у BotFather: `/setmenubutton` → URL Mini App, щоб відкривати
    його з меню бота.
 
 Mini App не працює без підписаного `Telegram.WebApp.initData`. Це зроблено

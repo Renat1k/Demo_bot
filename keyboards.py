@@ -1,4 +1,9 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MenuButtonWebApp,
+    WebAppInfo,
+)
 
 from config import SERVICES, WEBAPP_URL
 import texts
@@ -43,6 +48,16 @@ def _navigation_rows(
 
 def back_home_keyboard(back_callback: str, home_callback: str = CB_MAIN) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(_navigation_rows(back_callback, home_callback))
+
+
+def webapp_menu_button() -> MenuButtonWebApp | None:
+    """Persistent Mini App button next to Telegram's message input."""
+    if not WEBAPP_URL.startswith("https://"):
+        return None
+    return MenuButtonWebApp(
+        text=texts.BTN_WEBAPP,
+        web_app=WebAppInfo(url=WEBAPP_URL),
+    )
 
 
 def main_menu_keyboard(admin: bool = False) -> InlineKeyboardMarkup:

@@ -9,6 +9,7 @@ from telegram.ext import Application
 from config import ADMIN_CHAT_ID, BOT_TOKEN
 from database import expire_stale_holds, init_db
 from handlers import register_handlers
+from keyboards import webapp_menu_button
 from web import run_health_server
 
 logging.basicConfig(
@@ -30,6 +31,18 @@ async def post_init(application: Application) -> None:
         )
     except TelegramError:
         logger.exception("Не вдалося встановити команди бота.")
+
+    menu_button = webapp_menu_button()
+    if menu_button is None:
+        logger.warning(
+            "WEBAPP_URL не задано або він не HTTPS: кнопка Mini App біля поля вводу вимкнена."
+        )
+    else:
+        try:
+            await application.bot.set_chat_menu_button(menu_button=menu_button)
+            logger.info("Кнопка Mini App біля поля вводу увімкнена.")
+        except TelegramError:
+            logger.exception("Не вдалося встановити кнопку Mini App біля поля вводу.")
 
     if ADMIN_CHAT_ID is None:
         logger.warning("ADMIN_CHAT_ID не задано: адмін-панель буде недоступною.")

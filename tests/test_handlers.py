@@ -25,6 +25,12 @@ class WebAppInfo:
         self.url = url
 
 
+class MenuButtonWebApp:
+    def __init__(self, text, web_app):
+        self.text = text
+        self.web_app = web_app
+
+
 class CallbackQuery:
     pass
 
@@ -36,6 +42,7 @@ class Update:
 telegram.InlineKeyboardButton = InlineKeyboardButton
 telegram.InlineKeyboardMarkup = InlineKeyboardMarkup
 telegram.WebAppInfo = WebAppInfo
+telegram.MenuButtonWebApp = MenuButtonWebApp
 telegram.CallbackQuery = CallbackQuery
 telegram.Update = Update
 sys.modules["telegram"] = telegram
@@ -463,6 +470,9 @@ class BookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             ]
             self.assertEqual(len(web_buttons), 1)
             self.assertEqual(web_buttons[0].web_app.url, "https://example.test/app")
+            menu_button = keyboards.webapp_menu_button()
+            self.assertIsNotNone(menu_button)
+            self.assertEqual(menu_button.web_app.url, "https://example.test/app")
 
             keyboards.WEBAPP_URL = "http://example.test/app"
             markup = keyboards.main_menu_keyboard()
@@ -473,6 +483,7 @@ class BookingHandlerTests(unittest.IsolatedAsyncioTestCase):
                     for button in row
                 )
             )
+            self.assertIsNone(keyboards.webapp_menu_button())
         finally:
             keyboards.WEBAPP_URL = old_url
 
